@@ -17,95 +17,169 @@ from DeepCrazyhouse.configs.main_config import main_config
 from DeepCrazyhouse.src.domain.variants.constants import BOARD_HEIGHT, BOARD_WIDTH, NB_CHANNELS_TOTAL, NB_LABELS
 from DeepCrazyhouse.src.domain.variants.plane_policy_representation import FLAT_PLANE_IDX
 
+from openvino.inference_engine import IECore
 
 class NeuralNetAPI:
     """Groups every a lot of helpers to be used on NN handling"""
 
     def __init__(self, ctx="cpu", batch_size=1, select_policy_form_planes: bool = True,
                  model_architecture_dir="default", model_weights_dir="default"):
-        """
-        Constructor
-        :param ctx: Context used for inference "cpu" or "gpu"
-        :param batch_size: Batch size used for inference
-        """
-        self.batch_size = batch_size
+        
+        if ctx=="cpu" or ctx=="gpu":
+            """
+            Constructor
+            :param ctx: Context used for inference "cpu" or "gpu"
+            :param batch_size: Batch size used for inference
+            """
+            self.batch_size = batch_size
 
-        if not os.path.isdir(main_config["model_architecture_dir"]):
-            raise Exception(
-                "The given model_architecture_dir at: " + main_config["model_architecture_dir"] + " wasn't found."
-            )
-        if not os.path.isdir(main_config["model_weights_dir"]):
-            raise Exception("The given model_weights_dir at: " + main_config["model_weights_dir"] + " wasn't found.")
+            if not os.path.isdir(main_config["model_architecture_dir"]):
+                raise Exception(
+                    "The given model_architecture_dir at: " + main_config["model_architecture_dir"] + " wasn't found."
+                )
+            if not os.path.isdir(main_config["model_weights_dir"]):
+                raise Exception("The given model_weights_dir at: " + main_config["model_weights_dir"] + " wasn't found.")
 
-        if model_architecture_dir == "default":
-            self.symbol_path = glob.glob(main_config["model_architecture_dir"] + "*")[0]
-        else:
-            self.symbol_path = glob.glob(model_architecture_dir + "*")[0]
-
-        if model_weights_dir == "default":
-            self.params_path = glob.glob(main_config["model_weights_dir"] + "*")[0]
-        else:
-            self.params_path = glob.glob(model_weights_dir + "*")[0]
-        # make sure the needed files have been found
-        if self.symbol_path is None or ".json" not in self.symbol_path:
-            raise Exception(
-                "No symbol file (.json) was found in your given model_architecture_dir: "
-                + main_config["model_architecture_dir"]
-                + '. Please make sure that the path has a "/" at the end of the path.'
-            )
-        if self.params_path is None or ".params" not in self.params_path:
-            raise Exception(
-                "No params file (.params) was found in your given model_weights_dir: "
-                + main_config["model_weights_dir"]
-                + '. Please make sure that the path has a "/" at the end of the path.'
-            )
-
-        print("self.symbol_path:", self.symbol_path)
-        print("self.params_path:", self.params_path)
-        # construct the model name based on the parameter file
-        _, params_filename = os.path.split(self.params_path)
-        self.model_name = params_filename.replace(".params", "")
-        sym = mx.sym.load(self.symbol_path)
-        # https://github.com/apache/incubator-mxnet/issues/6951
-        save_dict = mx.nd.load(self.params_path)
-        arg_params = {}
-        aux_params = {}
-        for key, val in save_dict.items():
-            param_type, name = key.split(":", 1)
-            if param_type == "arg":
-                arg_params[name] = val
-            if param_type == "aux":
-                aux_params[name] = val
-        # set the context on CPU, switch to GPU if there is one available
-        if ctx == "cpu":
-            self.ctx = mx.cpu()
-        elif ctx == "gpu":
-            self.ctx = mx.gpu()
-        else:
-            raise Exception("Unavailable ctx mode given %s. You must either select 'cpu' or 'gpu'" % ctx)
-        # define batch_size times executor objects which are used for inference
-        # one executor object is used for the currently requested batch batch length
-        # the requested batch length is variable and at maximum the given batch_size
-        self.executors = []
-        for i in range(batch_size):
-            executor = sym.simple_bind(
-                ctx=self.ctx,
-                # add a new length for each size starting with 1
-                data=(i + 1, NB_CHANNELS_TOTAL, BOARD_HEIGHT, BOARD_WIDTH),
-                grad_req="null",
-                force_rebind=True,
-            )
-            executor.copy_params_from(arg_params, aux_params)
-            self.executors.append(executor)
-
-        # check if the current net uses a select_policy_from_planes style
-        output_dict = self.executors[0].output_dict
-        for idx, key in enumerate(output_dict):
-            # the policy output is always the 2nd one
-            if idx == 1 and output_dict[key].shape[1] != NB_LABELS:
-                self.select_policy_form_planes = select_policy_form_planes
+            if model_architecture_dir == "default":
+                self.symbol_path = glob.glob(main_config["model_architecture_dir"] + "*")[0]
             else:
-                self.select_policy_form_planes = False
+                self.symbol_path = glob.glob(model_architecture_dir + "*")[0]
+
+            if model_weights_dir == "default":
+                self.params_path = glob.glob(main_config["model_weights_dir"] + "*")[0]
+            else:
+                self.params_path = glob.glob(model_weights_dir + "*")[0]
+            # make sure the needed files have been found
+            if self.symbol_path is None or ".json" not in self.symbol_path:
+                raise Exception(
+                    "No symbol file (.json) was found in your given model_architecture_dir: "
+                    + main_config["model_architecture_dir"]
+                    + '. Please make sure that the path has a "/" at the end of the path.'
+                )
+            if self.params_path is None or ".params" not in self.params_path:
+                raise Exception(
+                    "No params file (.params) was found in your given model_weights_dir: "
+                    + main_config["model_weights_dir"]
+                    + '. Please make sure that the path has a "/" at the end of the path.'
+                )
+
+            print("self.symbol_path:", self.symbol_path)
+            print("self.params_path:", self.params_path)
+            # construct the model name based on the parameter file
+            _, params_filename = os.path.split(self.params_path)
+            self.model_name = params_filename.replace(".params", "")
+            sym = mx.sym.load(self.symbol_path)
+            # https://github.com/apache/incubator-mxnet/issues/6951
+            save_dict = mx.nd.load(self.params_path)
+            arg_params = {}
+            aux_params = {}
+            for key, val in save_dict.items():
+                param_type, name = key.split(":", 1)
+                if param_type == "arg":
+                    arg_params[name] = val
+                if param_type == "aux":
+                    aux_params[name] = val
+            # set the context on CPU, switch to GPU if there is one available
+            if ctx == "cpu":
+                self.ctx = mx.cpu()
+            elif ctx == "gpu":
+                self.ctx = mx.gpu()
+            else:
+                raise Exception("Unavailable ctx mode given %s. You must either select 'cpu' or 'gpu'" % ctx)
+            # define batch_size times executor objects which are used for inference
+            # one executor object is used for the currently requested batch batch length
+            # the requested batch length is variable and at maximum the given batch_size
+            self.executors = []
+            for i in range(batch_size):
+                executor = sym.simple_bind(
+                    ctx=self.ctx,
+                    # add a new length for each size starting with 1
+                    data=(i + 1, NB_CHANNELS_TOTAL, BOARD_HEIGHT, BOARD_WIDTH),
+                    grad_req="null",
+                    force_rebind=True,
+                )
+                executor.copy_params_from(arg_params, aux_params)
+                self.executors.append(executor)
+
+            # check if the current net uses a select_policy_from_planes style
+            output_dict = self.executors[0].output_dict
+            for idx, key in enumerate(output_dict):
+                # the policy output is always the 2nd one
+                if idx == 1 and output_dict[key].shape[1] != NB_LABELS:
+                    self.select_policy_form_planes = select_policy_form_planes
+                else:
+                    self.select_policy_form_planes = False
+        elif ctx=="myriad":
+            """
+            Constructor
+            :param ctx: Context used for inference "myriad"
+            :param batch_size: Batch size used for inference
+            """
+            self.batch_size = batch_size
+            self.read_net=None
+            self.exec_net=None
+
+            if not os.path.isdir(main_config["model_architecture_dir"]):
+                raise Exception(
+                    "The given model_architecture_dir at: " + main_config["model_architecture_dir"] + " wasn't found."
+                )
+            if not os.path.isdir(main_config["model_weights_dir"]):
+                raise Exception("The given model_weights_dir at: " + main_config["model_weights_dir"] + " wasn't found.")
+
+            if model_architecture_dir == "default":
+                self.symbol_path = glob.glob(main_config["model_architecture_dir"] + "*")[0]
+            else:
+                self.symbol_path = glob.glob(model_architecture_dir + "*")[0]
+
+            if model_weights_dir == "default":
+                self.params_path = glob.glob(main_config["model_weights_dir"] + "*")[0]
+            else:
+                self.params_path = glob.glob(model_weights_dir + "*")[0]
+            # make sure the needed files have been found
+            if self.symbol_path is None or ".xml" not in self.symbol_path:
+                raise Exception(
+                    "No symbol file (.xml) was found in your given model_architecture_dir: "
+                    + main_config["model_architecture_dir"]
+                    + '. Please make sure that the path has a "/" at the end of the path.'
+                )
+            if self.params_path is None or ".bin" not in self.params_path:
+                raise Exception(
+                    "No params file (.bin) was found in your given model_weights_dir: "
+                    + main_config["model_weights_dir"]
+                    + '. Please make sure that the path has a "/" at the end of the path.'
+                )
+
+            print("self.symbol_path:", self.symbol_path)
+            print("self.params_path:", self.params_path)
+            # construct the model name based on the parameter file
+            print("Creating Inference Engine")
+            ie = IECore()
+
+            # Read IR
+            print("Loading network")
+            self.read_net = ie.read_network(self.symbol_path, self.params_path)
+
+            self.read_net.batch_size = self.batch_size
+
+            # Loading model to the plugin
+            print("Loading model to the plugin")
+            try:
+                # ie.set_config(config={"KEY_VPU_MYRIAD_FORCE_RESET": "YES"}, device_name="MYRIAD")
+                self.exec_net = ie.load_network(network=self.read_net, device_name="MYRIAD")
+            except:
+                print("Could not reload model")
+
+            # TODO: Review use of this code.
+            # # check if the current net uses a select_policy_from_planes style
+            # output_dict = self.executors[0].output_dict
+            # for idx, key in enumerate(output_dict):
+            #     # the policy output is always the 2nd one
+            #     if idx == 1 and output_dict[key].shape[1] != NB_LABELS:
+            #         self.select_policy_form_planes = select_policy_form_planes
+            #     else:
+            #         self.select_policy_form_planes = False
+            
+
 
     def predict_single(self, x):
         """
