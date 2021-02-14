@@ -47,6 +47,7 @@ class CrazyAra:  # Too many instance attributes (25/7)
         self.mcts_agent = (
             self.rawnet_agent
         ) = self.ab_agent = self.gamestate = self.bestmove_value = self.move_time = self.score = None
+        self.openvino_rawnet_agent=None        
         self.engine_played_move = 0
         self.log_file_path = "CrazyAra-log.txt"
         self.score_file_path = "score-log.txt"
@@ -57,10 +58,10 @@ class CrazyAra:  # Too many instance attributes (25/7)
             "ab_candidate_moves": 7,  # candidate moves to consider for ab-search, clipped according to NN policy
             # set the context in which the neural networks calculation will be done
             # choose 'gpu' using the settings if there is one available
-            "context": "cpu",
-            "use_raw_network": False,
+            "context": "myriad",
+            "use_raw_network": True,
             "threads": min(8, multiprocessing.cpu_count()),
-            "batch_size": 8,
+            "batch_size": 1,
             "neural_net_services": 1,
             "playouts_empty_pockets": 99999,
             "playouts_filled_pockets": 99999,
@@ -158,21 +159,34 @@ jgs.-` __.'|  Developers: Johannes Czech, Moritz Willig, Alena Beyer
             from DeepCrazyhouse.src.domain.variants.game_state import GameState
             from DeepCrazyhouse.src.domain.agent.neural_net_api import NeuralNetAPI
             from DeepCrazyhouse.src.domain.agent.player.raw_net_agent import RawNetAgent
+            from DeepCrazyhouse.src.domain.agent.player.openvino_raw_net_agent import OpenvinoRawNetAgent
             from DeepCrazyhouse.src.domain.agent.player.mcts_agent import MCTSAgent
 
             self.param_validity_check()  # check for valid parameter setup and do auto-corrections if possible
 
             nets = []
-            for _ in range(self.settings["neural_net_services"]):
-                nets.append(NeuralNetAPI(ctx=self.settings["context"], batch_size=self.settings["batch_size"],
-                                         model_architecture_dir=self.settings["model_architecture_dir"],
-                                         model_weights_dir=self.settings["model_weights_dir"]))
+            if self.settings["context"]=="cpu" or self.settings["context"]=="gpu":
+                for _ in range(self.settings["neural_net_services"]):
+                    nets.append(NeuralNetAPI(ctx=self.settings["context"], batch_size=self.settings["batch_size"],
+                                            model_architecture_dir=self.settings["model_architecture_dir"],
+                                            model_weights_dir=self.settings["model_weights_dir"]))
 
-            self.rawnet_agent = RawNetAgent(
-                nets[0],
-                temperature=self.settings["centi_temperature"] / 100,
-                temperature_moves=self.settings["temperature_moves"],
-            )
+                self.rawnet_agent = RawNetAgent(
+                    nets[0],
+                    temperature=self.settings["centi_temperature"] / 100,
+                    temperature_moves=self.settings["temperature_moves"],
+                )
+
+            elif self.settings["context"]=="myriad":
+                for _ in range(self.settings["neural_net_services"]):
+                    nets.append(NeuralNetAPI(ctx=self.settings["context"], batch_size=self.settings["batch_size"],
+                                            model_architecture_dir=self.settings["model_architecture_dir"],
+                                            model_weights_dir=self.settings["model_weights_dir"]))
+                self.openvino_rawnet_agent = OpenvinoRawNetAgent(
+                    nets[0],
+                    temperature=self.settings["centi_temperature"] / 100,
+                    temperature_moves=self.settings["temperature_moves"],
+                )
 
             self.mcts_agent = MCTSAgent(
                 nets,
@@ -398,9 +412,14 @@ jgs.-` __.'|  Developers: Johannes Czech, Moritz Willig, Alena Beyer
         elif self.settings["search_type"] == "mcts":
             if self.settings["use_raw_network"] or movetime_ms <= self.settings["threshold_time_for_raw_net_ms"]:
                 self.log_print("info string Using raw network for fast mode...")
-                value, selected_move, _, _, centipawn, depth, nodes, time_elapsed_s, nps, pv = self.rawnet_agent.perform_action(
-                    self.gamestate
-                )
+                if self.settings["context"]=="cpu" or self.settings["context"]=="gpu":
+                    value, selected_move, _, _, centipawn, depth, nodes, time_elapsed_s, nps, pv = self.rawnet_agent.perform_action(
+                        self.gamestate
+                    )
+                elif self.settings["context"]=="myriad":
+                    value, selected_move, _, _, centipawn, depth, nodes, time_elapsed_s, nps, pv = self.openvino_rawnet_agent.perform_action(
+                        self.gamestate
+                    )
             else:
                 value, selected_move, _, _, centipawn, depth, nodes, time_elapsed_s, nps, pv = self.mcts_agent.perform_action(
                     self.gamestate
